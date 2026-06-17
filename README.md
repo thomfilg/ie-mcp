@@ -147,9 +147,43 @@ claude mcp add ie-mcp -- python C:\path\to\ie-mcp\ie_mcp.py
 
 …or add the same block as above to your `.mcp.json` / Claude Code MCP config.
 
-### Codex (and other stdio MCP clients)
+### Codex CLI
 
-Point the client at `python ie_mcp.py` as a stdio MCP server, passing the same env vars.
+Codex configures MCP servers as TOML in `~/.codex/config.toml` (Windows:
+`%USERPROFILE%\.codex\config.toml`). Add an `[mcp_servers.ie-mcp]` block:
+
+```toml
+[mcp_servers.ie-mcp]
+command = "python"
+args = ["C:\\path\\to\\ie-mcp\\ie_mcp.py"]
+
+[mcp_servers.ie-mcp.env]
+IE_DRIVER_PATH = "C:\\path\\to\\IEDriverServer.exe"
+IE_SITE_LIST   = "C:\\path\\to\\ie-mode-site-list.xml"
+IE_DEFAULT_URL = "http://your-legacy-app/"
+```
+
+Or add it from the command line:
+
+```bash
+codex mcp add ie-mcp --env IE_DRIVER_PATH=C:\path\to\IEDriverServer.exe -- python C:\path\to\ie-mcp\ie_mcp.py
+```
+
+Then verify Codex sees it and the tools are listed:
+
+```bash
+codex mcp list
+```
+
+> IEDriver attach can be slow on the first call. If Codex reports the server as
+> unresponsive on startup, give it a longer init timeout and confirm
+> `python ie_mcp.py --selftest` passes standalone first.
+
+### Other stdio MCP clients
+
+Any MCP client that speaks stdio works: point it at `python ie_mcp.py` as the server
+command and pass the same environment variables (see [Configuration](#configuration)).
+The server communicates over newline-delimited JSON-RPC 2.0 on stdin/stdout.
 
 ---
 
