@@ -27,53 +27,6 @@ extraction, readiness probing) tuned for the quirks of the Trident engine.
 
 ---
 
-## Why this exists
-
-Modern browser-automation tools (Playwright, Puppeteer, Selenium-on-Chromium) cannot render
-IE-only apps — the ones that depend on ActiveX, `document.all`, framesets, VBScript-era
-behaviours, or an enforced legacy document mode. Edge's **IE mode** is the last supported way
-to run them, but it is notoriously awkward to automate:
-
-- IEDriver attach is flaky (Protected-Mode boundary crossings, "could not find IE window").
-- The legacy engine rejects Selenium's modern JS atoms (`el.text`, `Select`, `get_attribute`).
-- Old document modes have no `window.JSON`, so naive scripts throw `'JSON' is undefined`.
-- Frame-based apps lose state if the session is recreated.
-
-`ie-mcp` works around all of these so the model gets a stable, high-level interface.
-
----
-
-## Features
-
-- **One long-lived session** kept alive across tool calls, so frame-based apps keep state.
-- **Auto-waiting locators** (`id` / `css` / `xpath` / `name` / `link_text` / `tag` / `class`).
-- **Nested frame navigation** — address frames-inside-frames with a path like `"3/0"`.
-- **Trident-safe primitives** — click, fill, select, hover, key-press, scroll, upload, dialogs,
-  all implemented to survive the legacy JS engine.
-- **Readiness probing** (`ie_wait_ready`) that waits for every same-origin frame's
-  `readyState` to complete *and* the DOM to stop changing — handles slow AJAX/frameset grids.
-- **Grid extraction** (`ie_grid`) that heuristically finds the real data table and returns
-  header-keyed rows.
-- **Screenshots** (full window or single element), JS execution, history navigation, resize.
-- **Cross-process single-browser lock** so two MCP clients can't collide on one IE session.
-- **Orphan cleanup** — enumerate and kill stray Edge IE-mode / IEDriver processes.
-- **No required pip install** — selenium can be loaded from a vendored deps folder.
-- **Built-in `--selftest`** to diagnose your setup before wiring up a client.
-
----
-
-## Requirements
-
-| Component | Notes |
-|-----------|-------|
-| **Windows** | IE mode only exists on Windows; the process-tracking and policy code use `tasklist`, `taskkill`, PowerShell/CIM and `winreg`. |
-| **Microsoft Edge** | With IE mode available (Edge ships it on Windows 10/11). |
-| **IEDriverServer.exe** | The Selenium IE driver (e.g. `4.14.0`). |
-| **Python 3.8+** | Standard library only, plus selenium. |
-| **selenium** | `>=4.14.0` — installed via `requirements.txt` or vendored (see below). |
-
----
-
 ## Installation
 
 Install it as a command, then let it register itself with your MCP clients. **No paths
@@ -145,6 +98,53 @@ ie-mcp --selftest
 ```
 
 A passing run prints `RESULT: PASS` and an IE/Trident `userAgent`.
+
+---
+
+## Why this exists
+
+Modern browser-automation tools (Playwright, Puppeteer, Selenium-on-Chromium) cannot render
+IE-only apps — the ones that depend on ActiveX, `document.all`, framesets, VBScript-era
+behaviours, or an enforced legacy document mode. Edge's **IE mode** is the last supported way
+to run them, but it is notoriously awkward to automate:
+
+- IEDriver attach is flaky (Protected-Mode boundary crossings, "could not find IE window").
+- The legacy engine rejects Selenium's modern JS atoms (`el.text`, `Select`, `get_attribute`).
+- Old document modes have no `window.JSON`, so naive scripts throw `'JSON' is undefined`.
+- Frame-based apps lose state if the session is recreated.
+
+`ie-mcp` works around all of these so the model gets a stable, high-level interface.
+
+---
+
+## Features
+
+- **One long-lived session** kept alive across tool calls, so frame-based apps keep state.
+- **Auto-waiting locators** (`id` / `css` / `xpath` / `name` / `link_text` / `tag` / `class`).
+- **Nested frame navigation** — address frames-inside-frames with a path like `"3/0"`.
+- **Trident-safe primitives** — click, fill, select, hover, key-press, scroll, upload, dialogs,
+  all implemented to survive the legacy JS engine.
+- **Readiness probing** (`ie_wait_ready`) that waits for every same-origin frame's
+  `readyState` to complete *and* the DOM to stop changing — handles slow AJAX/frameset grids.
+- **Grid extraction** (`ie_grid`) that heuristically finds the real data table and returns
+  header-keyed rows.
+- **Screenshots** (full window or single element), JS execution, history navigation, resize.
+- **Cross-process single-browser lock** so two MCP clients can't collide on one IE session.
+- **Orphan cleanup** — enumerate and kill stray Edge IE-mode / IEDriver processes.
+- **No required pip install** — selenium can be loaded from a vendored deps folder.
+- **Built-in `--selftest`** to diagnose your setup before wiring up a client.
+
+---
+
+## Requirements
+
+| Component | Notes |
+|-----------|-------|
+| **Windows** | IE mode only exists on Windows; the process-tracking and policy code use `tasklist`, `taskkill`, PowerShell/CIM and `winreg`. |
+| **Microsoft Edge** | With IE mode available (Edge ships it on Windows 10/11). |
+| **IEDriverServer.exe** | The Selenium IE driver (e.g. `4.14.0`). |
+| **Python 3.8+** | Standard library only, plus selenium. |
+| **selenium** | `>=4.14.0` — installed via `requirements.txt` or vendored (see below). |
 
 ---
 
