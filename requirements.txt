@@ -1,0 +1,11 @@
+# ie-mcp runtime dependencies
+#
+# selenium drives Microsoft Edge in IE mode through the Selenium IEDriver.
+# 4.14.0 is the version this server was developed and tested against; newer
+# 4.x releases generally work but the IEDriver attach behaviour is version
+# sensitive, so pin if you hit "could not find IE window" issues.
+#
+# NOTE: the server can also load selenium from a vendored deps folder (see the
+# IE_PYDEPS env var) so it can run with no global pip install. Installing from
+# this file is the simpler path; vendoring is for locked-down/offline machines.
+selenium>=4.14.0,<5

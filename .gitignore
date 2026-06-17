@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Vendored selenium deps (loaded via IE_PYDEPS)
+.pydeps/
+
+# ie-mcp runtime artifacts
+*.log
+ie_mcp.lock
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
