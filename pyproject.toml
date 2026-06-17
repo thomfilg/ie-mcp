@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ie-mcp"
+version = "0.1.0"
+description = "MCP server that drives Microsoft Edge in IE mode (Trident) via the Selenium IEDriver — automate legacy IE-only web apps from any MCP client."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "thomfilg" }]
+keywords = ["mcp", "ie-mode", "internet-explorer", "edge", "selenium", "automation"]
+dependencies = ["selenium>=4.14.0,<5"]
+
+[project.urls]
+Homepage = "https://github.com/thomfilg/ie-mcp"
+Repository = "https://github.com/thomfilg/ie-mcp"
+
+# Exposes `ie-mcp` on PATH so MCP clients launch it by name (no python path).
+[project.scripts]
+ie-mcp = "ie_mcp:main"
+
+[tool.setuptools]
+py-modules = ["ie_mcp"]

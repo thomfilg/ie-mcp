@@ -76,25 +76,34 @@ to run them, but it is notoriously awkward to automate:
 
 ## Installation
 
-```bash
-git clone https://github.com/thomfilg/ie-mcp.git
-cd ie-mcp
+Install it as a command, then let it register itself with your MCP clients. **No paths
+to type** — `ie-mcp` resolves its own launch path.
 
-# install selenium (or vendor it — see "No-pip / vendored selenium" below)
-pip install -r requirements.txt
+```bash
+# 1. install (puts an `ie-mcp` command on PATH; pipx/uv keep it isolated)
+pipx install git+https://github.com/thomfilg/ie-mcp.git
+#   or:  uv tool install git+https://github.com/thomfilg/ie-mcp.git
+#   or from a clone:  pipx install .
+
+# 2. register with every MCP client found on PATH (Claude Code, Codex)
+ie-mcp --install
 ```
 
+That's it — `ie-mcp --install` runs `claude mcp add` / `codex mcp add` for you with the
+path already solved. Remove it again with `ie-mcp --uninstall`.
+
 Download **IEDriverServer.exe** (matching your Edge / selenium version) from the
-[Selenium downloads](https://www.selenium.dev/downloads/) page and note its path.
+[Selenium downloads](https://www.selenium.dev/downloads/) page if it isn't already in the
+default per-user selenium cache.
 
 ### Verify the setup
 
-Before wiring up an MCP client, run the built-in self-test. It checks dependencies and
-paths, then opens and closes a real IE-mode session and confirms the Trident engine is
+Before (or after) wiring up a client, run the built-in self-test. It checks dependencies
+and paths, then opens and closes a real IE-mode session and confirms the Trident engine is
 actually in use:
 
 ```bash
-python ie_mcp.py --selftest
+ie-mcp --selftest
 ```
 
 A passing run prints `RESULT: PASS` and an IE/Trident `userAgent`.
@@ -118,72 +127,52 @@ All configuration is via environment variables — **all optional**:
 | `IE_LOCK_FILE` | `%TEMP%\ie_mcp.lock` | Cross-process single-browser lock file. |
 | `IE_NO_LOCK` | *(unset)* | Set to `1`/`true`/`yes` to disable the single-browser lock. |
 
-### Claude Desktop
+### Manual registration (fallback)
 
-Edit your `claude_desktop_config.json`
-(Windows: `%APPDATA%\Claude\claude_desktop_config.json`) and add:
+`ie-mcp --install` is the easy path. If you'd rather wire a client up by hand — or set
+env vars per client — use the `ie-mcp` command (it's on PATH after install, so still no
+hand-typed paths):
+
+**Claude Code**
+
+```bash
+claude mcp add ie-mcp -- ie-mcp
+# with env vars only if you need to override defaults:
+claude mcp add ie-mcp --env IE_SITE_LIST=C:\path\to\site-list.xml -- ie-mcp
+```
+
+**Codex CLI** — `~/.codex/config.toml` (Windows: `%USERPROFILE%\.codex\config.toml`):
+
+```toml
+[mcp_servers.ie-mcp]
+command = "ie-mcp"
+# args / env are optional — only add env keys you want to override:
+# [mcp_servers.ie-mcp.env]
+# IE_SITE_LIST = "C:\\path\\to\\site-list.xml"
+```
+
+…or `codex mcp add ie-mcp -- ie-mcp`, then `codex mcp list` to confirm.
+
+**Claude Desktop** — `claude_desktop_config.json`
+(Windows: `%APPDATA%\Claude\claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
-    "ie-mcp": {
-      "command": "python",
-      "args": ["C:\\path\\to\\ie-mcp\\ie_mcp.py"],
-      "env": {
-        "IE_DRIVER_PATH": "C:\\path\\to\\IEDriverServer.exe",
-        "IE_SITE_LIST": "C:\\path\\to\\ie-mode-site-list.xml",
-        "IE_DEFAULT_URL": "http://your-legacy-app/"
-      }
-    }
+    "ie-mcp": { "command": "ie-mcp" }
   }
 }
 ```
 
-### Claude Code
-
-```bash
-claude mcp add ie-mcp -- python C:\path\to\ie-mcp\ie_mcp.py
-```
-
-…or add the same block as above to your `.mcp.json` / Claude Code MCP config.
-
-### Codex CLI
-
-Codex configures MCP servers as TOML in `~/.codex/config.toml` (Windows:
-`%USERPROFILE%\.codex\config.toml`). Add an `[mcp_servers.ie-mcp]` block:
-
-```toml
-[mcp_servers.ie-mcp]
-command = "python"
-args = ["C:\\path\\to\\ie-mcp\\ie_mcp.py"]
-
-[mcp_servers.ie-mcp.env]
-IE_DRIVER_PATH = "C:\\path\\to\\IEDriverServer.exe"
-IE_SITE_LIST   = "C:\\path\\to\\ie-mode-site-list.xml"
-IE_DEFAULT_URL = "http://your-legacy-app/"
-```
-
-Or add it from the command line:
-
-```bash
-codex mcp add ie-mcp --env IE_DRIVER_PATH=C:\path\to\IEDriverServer.exe -- python C:\path\to\ie-mcp\ie_mcp.py
-```
-
-Then verify Codex sees it and the tools are listed:
-
-```bash
-codex mcp list
-```
-
-> IEDriver attach can be slow on the first call. If Codex reports the server as
-> unresponsive on startup, give it a longer init timeout and confirm
-> `python ie_mcp.py --selftest` passes standalone first.
+> IEDriver attach can be slow on the first call. If a client reports the server as
+> unresponsive on startup, give it a longer init timeout and confirm `ie-mcp --selftest`
+> passes standalone first.
 
 ### Other stdio MCP clients
 
-Any MCP client that speaks stdio works: point it at `python ie_mcp.py` as the server
-command and pass the same environment variables (see [Configuration](#configuration)).
-The server communicates over newline-delimited JSON-RPC 2.0 on stdin/stdout.
+Any MCP client that speaks stdio works: set the server command to `ie-mcp` and pass any
+env vars you want to override (see the table above). The server communicates over
+newline-delimited JSON-RPC 2.0 on stdin/stdout.
 
 ---
 
@@ -273,23 +262,28 @@ policy and assumes Edge is already configured for IE mode.
 
 ## Development
 
-This is a single-file server (`ie_mcp.py`) with no build step — clone, install selenium,
-and run.
+This is a single-file server (`ie_mcp.py`). Install it editable so the `ie-mcp` command
+points at your working copy:
 
 ```bash
 git clone https://github.com/thomfilg/ie-mcp.git
 cd ie-mcp
-pip install -r requirements.txt
+pip install -e .          # or: pipx install --editable .
 
 # diagnose deps/paths and open a real IE-mode session
-python ie_mcp.py --selftest
+ie-mcp --selftest
 ```
+
+Running straight from the clone without installing also works — `python ie_mcp.py
+--selftest` / `--install` fall back to launching the file by absolute path.
 
 **Project layout**
 
 - `ie_mcp.py` — the entire server: config, the IEDriver wrapper (`IeSession`), one
-  `t_*` function per tool, the `TOOLS` registry, and the stdio JSON-RPC loop.
-- `requirements.txt` — runtime deps (just selenium).
+  `t_*` function per tool, the `TOOLS` registry, the `--install`/`--selftest` CLI,
+  and the stdio JSON-RPC loop.
+- `pyproject.toml` — packaging + the `ie-mcp` console-script entry point.
+- `requirements.txt` — runtime deps (just selenium; mirrors `pyproject.toml`).
 
 **Adding a tool**
 

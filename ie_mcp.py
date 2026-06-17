@@ -1502,9 +1502,57 @@ def selftest():
     return 0 if ok else 1
 
 
+def _self_command():
+    """The command an MCP client should run to launch this server.
+
+    Prefer the installed `ie-mcp` console script (no python, no path); fall back
+    to `python <abspath of this file>` when running straight from a clone.
+    """
+    import shutil
+    exe = shutil.which("ie-mcp")
+    if exe:
+        return [exe]
+    return [sys.executable, os.path.abspath(__file__)]
+
+
+def install(remove=False):
+    """Register (or with remove=True, unregister) ie-mcp with every MCP client
+    found on PATH. The launch path is resolved automatically — nothing to type."""
+    import shutil
+    cmd = _self_command()
+    verb = "remove" if remove else "add"
+    clients = {
+        "claude": ["claude", "mcp", "remove", "ie-mcp"] if remove
+                  else ["claude", "mcp", "add", "ie-mcp", "--", *cmd],
+        "codex":  ["codex", "mcp", "remove", "ie-mcp"] if remove
+                  else ["codex", "mcp", "add", "ie-mcp", "--", *cmd],
+    }
+    print(f"ie-mcp {verb} (launch: {' '.join(cmd)})")
+    done = False
+    for name, argv in clients.items():
+        if not shutil.which(name):
+            print(f"  {name}: not on PATH, skipping")
+            continue
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+            out = (r.stderr or r.stdout or "").strip().splitlines()
+            print(f"  {name}: {'OK' if r.returncode == 0 else 'FAIL'}"
+                  + (f" — {out[0]}" if out else ""))
+            done = done or r.returncode == 0
+        except Exception as exc:
+            print(f"  {name}: ERROR {exc}")
+    if not done and not remove:
+        print("  (no clients updated — install claude and/or codex CLI first)")
+    return 0 if (done or remove) else 1
+
+
 def main():
     if "--selftest" in sys.argv:
         sys.exit(selftest())
+    if "--install" in sys.argv:
+        sys.exit(install())
+    if "--uninstall" in sys.argv:
+        sys.exit(install(remove=True))
     try:
         sys.stdin.reconfigure(encoding="utf-8")
         sys.stdout.reconfigure(encoding="utf-8", newline="\n")
