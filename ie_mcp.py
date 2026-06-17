@@ -1526,6 +1526,9 @@ def install(remove=False):
                   else ["claude", "mcp", "add", "ie-mcp", "--", *cmd],
         "codex":  ["codex", "mcp", "remove", "ie-mcp"] if remove
                   else ["codex", "mcp", "add", "ie-mcp", "--", *cmd],
+        # gemini's `mcp add` takes the command as positional args (no `--`).
+        "gemini": ["gemini", "mcp", "remove", "ie-mcp"] if remove
+                  else ["gemini", "mcp", "add", "ie-mcp", *cmd],
     }
     print(f"ie-mcp {verb} (launch: {' '.join(cmd)})")
     done = False

@@ -85,7 +85,7 @@ pipx install git+https://github.com/thomfilg/ie-mcp.git
 #   or:  uv tool install git+https://github.com/thomfilg/ie-mcp.git
 #   or from a clone:  pipx install .
 
-# 2. register with every MCP client found on PATH (Claude Code, Codex)
+# 2. register with every MCP client found on PATH (Claude Code, Codex, Gemini CLI)
 ie-mcp --install
 ```
 
@@ -152,6 +152,26 @@ command = "ie-mcp"
 ```
 
 …or `codex mcp add ie-mcp -- ie-mcp`, then `codex mcp list` to confirm.
+
+**Gemini CLI**
+
+```bash
+gemini mcp add ie-mcp ie-mcp
+# with an env override (repeat -e as needed):
+gemini mcp add -e IE_SITE_LIST=C:\path\to\site-list.xml ie-mcp ie-mcp
+```
+
+…or edit `~/.gemini/settings.json` (Windows: `%USERPROFILE%\.gemini\settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "ie-mcp": { "command": "ie-mcp" }
+  }
+}
+```
+
+Then `gemini mcp list` to confirm it's registered.
 
 **Claude Desktop** — `claude_desktop_config.json`
 (Windows: `%APPDATA%\Claude\claude_desktop_config.json`):
