@@ -89,8 +89,46 @@ pipx install git+https://github.com/thomfilg/ie-mcp.git
 ie-mcp --install
 ```
 
-That's it — `ie-mcp --install` runs `claude mcp add` / `codex mcp add` for you with the
-path already solved. Remove it again with `ie-mcp --uninstall`.
+That's it — `ie-mcp --install` runs `claude mcp add` / `codex mcp add` / `gemini mcp add`
+for you with the path already solved. Remove it again with `ie-mcp --uninstall`.
+
+### Register a client by hand
+
+`ie-mcp --install` (above) does this for you. To wire one up manually, use the `ie-mcp`
+command — it's on PATH after install, so there's still no path to type:
+
+| Client | Command |
+|--------|---------|
+| **Claude Code** | `claude mcp add ie-mcp -- ie-mcp` |
+| **Codex CLI** | `codex mcp add ie-mcp -- ie-mcp` |
+| **Gemini CLI** | `gemini mcp add ie-mcp ie-mcp` |
+
+Or via a client's config file (all equivalent — `{ "command": "ie-mcp" }`):
+
+- **Claude Desktop** — `claude_desktop_config.json` (Windows: `%APPDATA%\Claude\claude_desktop_config.json`)
+- **Gemini CLI** — `~/.gemini/settings.json` (Windows: `%USERPROFILE%\.gemini\settings.json`)
+
+```json
+{
+  "mcpServers": {
+    "ie-mcp": { "command": "ie-mcp" }
+  }
+}
+```
+
+- **Codex CLI** — `~/.codex/config.toml` (Windows: `%USERPROFILE%\.codex\config.toml`)
+
+```toml
+[mcp_servers.ie-mcp]
+command = "ie-mcp"
+```
+
+Any other stdio MCP client works too: set the server command to `ie-mcp`. To override a
+default, add the env var to that client's `env` block — see [Configuration](#configuration).
+
+> IEDriver attach can be slow on the first call. If a client reports the server as
+> unresponsive on startup, give it a longer init timeout and confirm `ie-mcp --selftest`
+> passes standalone first.
 
 Download **IEDriverServer.exe** (matching your Edge / selenium version) from the
 [Selenium downloads](https://www.selenium.dev/downloads/) page if it isn't already in the
@@ -127,72 +165,6 @@ All configuration is via environment variables — **all optional**:
 | `IE_LOCK_FILE` | `%TEMP%\ie_mcp.lock` | Cross-process single-browser lock file. |
 | `IE_NO_LOCK` | *(unset)* | Set to `1`/`true`/`yes` to disable the single-browser lock. |
 
-### Manual registration (fallback)
-
-`ie-mcp --install` is the easy path. If you'd rather wire a client up by hand — or set
-env vars per client — use the `ie-mcp` command (it's on PATH after install, so still no
-hand-typed paths):
-
-**Claude Code**
-
-```bash
-claude mcp add ie-mcp -- ie-mcp
-# with env vars only if you need to override defaults:
-claude mcp add ie-mcp --env IE_SITE_LIST=C:\path\to\site-list.xml -- ie-mcp
-```
-
-**Codex CLI** — `~/.codex/config.toml` (Windows: `%USERPROFILE%\.codex\config.toml`):
-
-```toml
-[mcp_servers.ie-mcp]
-command = "ie-mcp"
-# args / env are optional — only add env keys you want to override:
-# [mcp_servers.ie-mcp.env]
-# IE_SITE_LIST = "C:\\path\\to\\site-list.xml"
-```
-
-…or `codex mcp add ie-mcp -- ie-mcp`, then `codex mcp list` to confirm.
-
-**Gemini CLI**
-
-```bash
-gemini mcp add ie-mcp ie-mcp
-# with an env override (repeat -e as needed):
-gemini mcp add -e IE_SITE_LIST=C:\path\to\site-list.xml ie-mcp ie-mcp
-```
-
-…or edit `~/.gemini/settings.json` (Windows: `%USERPROFILE%\.gemini\settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "ie-mcp": { "command": "ie-mcp" }
-  }
-}
-```
-
-Then `gemini mcp list` to confirm it's registered.
-
-**Claude Desktop** — `claude_desktop_config.json`
-(Windows: `%APPDATA%\Claude\claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "ie-mcp": { "command": "ie-mcp" }
-  }
-}
-```
-
-> IEDriver attach can be slow on the first call. If a client reports the server as
-> unresponsive on startup, give it a longer init timeout and confirm `ie-mcp --selftest`
-> passes standalone first.
-
-### Other stdio MCP clients
-
-Any MCP client that speaks stdio works: set the server command to `ie-mcp` and pass any
-env vars you want to override (see the table above). The server communicates over
-newline-delimited JSON-RPC 2.0 on stdin/stdout.
 
 ---
 
