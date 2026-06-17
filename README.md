@@ -29,11 +29,27 @@ extraction, readiness probing) tuned for the quirks of the Trident engine.
 
 ## Installation
 
-Install it as a command, then let it register itself with your MCP clients. **No paths
-to type** — `ie-mcp` resolves its own launch path.
+### Option A — one command, straight from GitHub (recommended)
+
+No clone, no separate install. Requires [`uv`](https://docs.astral.sh/uv/) on PATH
+(`pip install uv`, or `winget install astral-sh.uv`). `uvx` fetches the repo, installs
+selenium into an isolated env, and runs the server on each launch:
 
 ```bash
-# 1. install (puts an `ie-mcp` command on PATH; pipx/uv keep it isolated)
+claude mcp add ie-mcp -- uvx --from git+https://github.com/thomfilg/ie-mcp.git ie-mcp
+codex  mcp add ie-mcp -- uvx --from git+https://github.com/thomfilg/ie-mcp.git ie-mcp
+gemini mcp add ie-mcp    uvx --from git+https://github.com/thomfilg/ie-mcp.git ie-mcp
+```
+
+> `claude mcp add` takes `<name> <command…>` — here the name is `ie-mcp` and the command
+> is the `uvx …` part. A bare repo URL won't work (it'd be treated as a remote HTTP server).
+
+### Option B — install once, then a short command
+
+Install the `ie-mcp` command on PATH, then let it register itself with every MCP client:
+
+```bash
+# 1. install (pipx/uv keep it isolated)
 pipx install git+https://github.com/thomfilg/ie-mcp.git
 #   or:  uv tool install git+https://github.com/thomfilg/ie-mcp.git
 #   or from a clone:  pipx install .
@@ -42,13 +58,14 @@ pipx install git+https://github.com/thomfilg/ie-mcp.git
 ie-mcp --install
 ```
 
-That's it — `ie-mcp --install` runs `claude mcp add` / `codex mcp add` / `gemini mcp add`
-for you with the path already solved. Remove it again with `ie-mcp --uninstall`.
+`ie-mcp --install` runs `claude mcp add` / `codex mcp add` / `gemini mcp add` for you with
+the launch path already solved. Remove it again with `ie-mcp --uninstall`.
 
 ### Register a client by hand
 
-`ie-mcp --install` (above) does this for you. To wire one up manually, use the `ie-mcp`
-command — it's on PATH after install, so there's still no path to type:
+`ie-mcp --install` (Option B) does this for you. To wire one up manually, use the `ie-mcp`
+command (after `pipx install`). If you skipped the install (Option A), replace `ie-mcp`
+in the command column with `uvx --from git+https://github.com/thomfilg/ie-mcp.git ie-mcp`.
 
 | Client | Command |
 |--------|---------|
