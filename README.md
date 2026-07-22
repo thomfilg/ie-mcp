@@ -146,8 +146,11 @@ to run them, but it is notoriously awkward to automate:
 - **Grid extraction** (`ie_grid`) that heuristically finds the real data table and returns
   header-keyed rows.
 - **Screenshots** (full window or single element), JS execution, history navigation, resize.
-- **Cross-process single-browser lock** so two MCP clients can't collide on one IE session.
-- **Orphan cleanup** — enumerate and kill stray Edge IE-mode / IEDriver processes.
+- **One browser per MCP process**, with parallel agents isolated by session identity.
+- **Atomic per-session leases** prevent two processes from claiming the same explicit identity.
+- **Session-scoped logs and ownership records** under `%TEMP%\ie-mcp\sessions\<session-id>`.
+- **Safe orphan cleanup** kills only browsers proven to belong to a crashed session; live agents
+  and untracked Edge processes are preserved.
 - **No required pip install** — selenium can be loaded from a vendored deps folder.
 - **Built-in `--selftest`** to diagnose your setup before wiring up a client.
 
@@ -178,9 +181,11 @@ All configuration is via environment variables — **all optional**:
 | `IE_ATTACH_RETRIES` | `3` | IEDriver attach attempts. |
 | `IE_PAGE_TIMEOUT` | `30` | Per-page load timeout (seconds). |
 | `IE_PYDEPS` | `../.pydeps` | Extra `sys.path` dir for vendored selenium. |
-| `IE_LOG_FILE` | *(unset)* | If set, also append `[ie-mcp]` logs to this file. |
-| `IE_LOCK_FILE` | `%TEMP%\ie_mcp.lock` | Cross-process single-browser lock file. |
-| `IE_NO_LOCK` | *(unset)* | Set to `1`/`true`/`yes` to disable the single-browser lock. |
+| `IE_LOG_FILE` | `<session-dir>\ie-mcp.log` | Optional override for this session's log file. |
+| `IE_SESSION_ID` | `pid-<MCP process PID>` | Stable agent/session name. Different IDs can run concurrently; the same ID is exclusive. |
+| `IE_SESSION_ROOT` | `%TEMP%\ie-mcp\sessions` | Root for session directories containing logs, leases, and ownership records. |
+| `IE_LOCK_FILE` | `<session-dir>\session.lock` | Optional override for this session's atomic lease file. |
+| `IE_NO_LOCK` | *(unset)* | Development escape hatch that disables the per-session lease. Do not use for normal agents. |
 
 
 ---
@@ -193,7 +198,7 @@ All configuration is via environment variables — **all optional**:
 | `ie_goto` | Navigate the current session to a new URL. |
 | `ie_status` | Session state as JSON (active/alive, title, url, owned PIDs). |
 | `ie_browsers` | List all Edge IE-mode windows + IEDriver processes, flagging the one this session owns. |
-| `ie_kill_orphans` | Terminate IE-mode Edge / IEDriver processes not owned by this session. |
+| `ie_kill_orphans` | Terminate processes recorded for crashed sessions only; never kills live-agent or unknown browsers. |
 | `ie_frames` | List the frames/iframes of the current page (index, name, id, src). |
 | `ie_text` | Get visible text of the page or a specific frame. |
 | `ie_html` | Get HTML source of the page or a frame. |
@@ -262,7 +267,7 @@ policy and assumes Edge is already configured for IE mode.
 | Symptom | Fix |
 |---------|-----|
 | `could not start Edge IE mode after N tries` | Confirm IE mode renders the site manually in Edge; check `IE_SITE_LIST`; try bumping `IE_ATTACH_RETRIES`. |
-| `another ie-mcp process … already owns the IE browser` | A second client tried to start. Close the other one, run `ie_kill_orphans`, or set `IE_NO_LOCK=1`. |
+| `IE session '<id>' is already owned` | Two clients used the same `IE_SESSION_ID`. Give each agent a unique ID, or omit it to use the MCP process PID automatically. |
 | `IE engine: NO (Chromium?)` in selftest | The site isn't matching the IE-mode site list; the page rendered in Chromium. Fix the site list / policy. |
 | Leftover Edge windows after a crash | Use `ie_browsers` to inspect and `ie_kill_orphans` to clean up. |
 | `'JSON' is undefined` from your own `ie_js` | The page is in IE7/quirks mode with no `window.JSON`. Return delimited strings instead of `JSON.stringify`. |
@@ -306,8 +311,34 @@ Running straight from the clone without installing also works — `python ie_mcp
 **Debugging**
 
 - Set `IE_LOG_FILE` to capture the `[ie-mcp]` stderr log to a file.
-- Use `ie_browsers` / `ie_kill_orphans` to inspect and clean up stray Edge/IEDriver processes.
-- Set `IE_NO_LOCK=1` while iterating to bypass the single-browser lock.
+- Use `ie_browsers` / `ie_kill_orphans` to inspect sessions and clean up browsers left by
+  crashed owners. Cleanup deliberately preserves unknown processes and every live agent.
+- Set a descriptive `IE_SESSION_ID` when logs need to remain easy to correlate with an agent.
+- Set `IE_NO_LOCK=1` only while debugging the lease implementation itself.
+
+### Parallel agents
+
+Every MCP process still owns exactly one long-lived Selenium session and therefore one browser.
+Multiple MCP processes can run simultaneously because their leases, logs, owner records, and
+IEDriver-created Edge profiles are session-scoped. With no configuration, the MCP process PID is
+used as the session ID, which makes separate Codex/Claude agent processes independent automatically.
+
+```toml
+[mcp_servers.ie-mcp.env]
+IE_SESSION_ID = "qa-agent-country"
+```
+
+IEDriver continues to use native events and require window focus. Parallel browsers can therefore
+compete for focus on the visible Windows desktop; this mode provides process ownership and cleanup
+isolation, not true headless IE mode.
+
+### Tests
+
+The ownership suite uses mocked process tables and never opens Edge:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py" -v
+```
 
 ### Contributing
 

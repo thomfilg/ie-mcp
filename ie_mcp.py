@@ -22,10 +22,12 @@ Configuration (all via env vars, all optional):
   IE_ATTACH_RETRIES IEDriver attach attempts (default 3)
   IE_PAGE_TIMEOUT   per-page load timeout in seconds (default 30)
   IE_PYDEPS         extra sys.path dir for vendored selenium (default ../.pydeps)
+  IE_SESSION_ID     logical agent/session name (default pid-<mcp process PID>)
+  IE_SESSION_ROOT   root for per-session logs, locks, and ownership records
 
 Design notes:
-- One long-lived Selenium session is kept alive across tool calls (the MCP
-  process stays running), so frame-based apps keep their state.
+- Each MCP process owns one long-lived Selenium session. Different processes
+  use independent session IDs and may run concurrently.
 - IEDriver attach is flaky (Protected Mode boundary crossings, "could not find
   IE window"), so session creation is retried.
 - No pip dependencies: selenium is loaded from a vendored deps folder and the
@@ -40,6 +42,8 @@ import sys
 import tempfile
 import time
 import traceback
+from dataclasses import dataclass
+from pathlib import Path
 
 # --- make vendored selenium importable regardless of how we're launched ------
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,9 +65,48 @@ SITE_LIST = os.environ.get("IE_SITE_LIST")  # optional; no app-specific default
 DEFAULT_URL = os.environ.get("IE_DEFAULT_URL", "about:blank")
 ATTACH_RETRIES = int(os.environ.get("IE_ATTACH_RETRIES", "3"))
 PAGE_TIMEOUT = int(os.environ.get("IE_PAGE_TIMEOUT", "30"))
-LOG_FILE = os.environ.get("IE_LOG_FILE")
-LOCK_FILE = os.environ.get("IE_LOCK_FILE", os.path.join(tempfile.gettempdir(), "ie_mcp.lock"))
 USE_LOCK = os.environ.get("IE_NO_LOCK", "").lower() not in ("1", "true", "yes")
+
+
+@dataclass(frozen=True)
+class SessionPaths:
+    session_id: str
+    root: Path
+    directory: Path
+    log_file: Path
+    lock_file: Path
+    owner_file: Path
+
+
+def _safe_session_id(value):
+    session_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value)).strip("-.")
+    if not session_id:
+        raise ValueError("IE_SESSION_ID must contain at least one letter or number")
+    return session_id[:80]
+
+
+def build_session_paths(env=None, pid=None):
+    """Resolve all runtime artifacts beneath one MCP process's session directory."""
+    env = os.environ if env is None else env
+    pid = os.getpid() if pid is None else int(pid)
+    session_id = _safe_session_id(env.get("IE_SESSION_ID") or f"pid-{pid}")
+    root = Path(env.get("IE_SESSION_ROOT") or Path(tempfile.gettempdir()) / "ie-mcp" / "sessions")
+    directory = root / session_id
+    return SessionPaths(
+        session_id=session_id,
+        root=root,
+        directory=directory,
+        log_file=Path(env.get("IE_LOG_FILE") or directory / "ie-mcp.log"),
+        lock_file=Path(env.get("IE_LOCK_FILE") or directory / "session.lock"),
+        owner_file=directory / "owner.json",
+    )
+
+
+SESSION_PATHS = build_session_paths()
+SESSION_ID = SESSION_PATHS.session_id
+SESSION_ROOT = SESSION_PATHS.root
+LOG_FILE = SESSION_PATHS.log_file
+LOCK_FILE = SESSION_PATHS.lock_file
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "ie-mcp", "version": "0.1.0"}
@@ -74,13 +117,14 @@ def log(*a):
     print(msg, file=sys.stderr, flush=True)
     if LOG_FILE:
         try:
+            Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
             with open(LOG_FILE, "a", encoding="utf-8") as fh:
                 fh.write(msg + "\n")
         except Exception:
             pass
 
 
-# --- cross-process single-browser lock (Codex + Claude must not collide) ------
+# --- per-agent ownership (one MCP process owns one browser) ------------------
 def _pid_alive(pid):
     try:
         out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
@@ -90,35 +134,112 @@ def _pid_alive(pid):
         return False
 
 
-def acquire_lock():
-    """Refuse to start a 2nd concurrent IE session machine-wide (single browser)."""
-    if not USE_LOCK:
-        return
-    if os.path.exists(LOCK_FILE):
-        holder = None
-        try:
-            holder = int(open(LOCK_FILE).read().strip().split()[0])
-        except Exception:
-            holder = None
-        if holder and holder != os.getpid() and _pid_alive(holder):
-            raise RuntimeError(
-                f"another ie-mcp process (PID {holder}) already owns the IE browser. "
-                f"Close it, run ie_kill_orphans there, or set IE_NO_LOCK=1 to override.")
+def _read_json(path):
     try:
-        with open(LOCK_FILE, "w") as fh:
-            fh.write(str(os.getpid()))
-    except Exception as exc:
-        log(f"WARN could not write lock file: {exc}")
+        with open(path, encoding="utf-8") as fh:
+            value = json.load(fh)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_json_atomic(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with open(temporary, "w", encoding="utf-8") as fh:
+        json.dump(value, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    os.replace(temporary, path)
+
+
+class SessionLease:
+    """Atomic lease for one logical agent session; different IDs never contend."""
+
+    def __init__(self, paths, pid=None, pid_alive=None):
+        self.paths = paths
+        self.pid = os.getpid() if pid is None else int(pid)
+        self.pid_alive = pid_alive or _pid_alive
+        self.acquired = False
+
+    def _record(self, **updates):
+        record = _read_json(self.paths.owner_file)
+        record.update({
+            "session_id": self.paths.session_id,
+            "owner_pid": self.pid,
+            "updated_at": time.time(),
+            **updates,
+        })
+        _write_json_atomic(self.paths.owner_file, record)
+        return record
+
+    def acquire(self):
+        if self.acquired:
+            return
+        self.paths.directory.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "session_id": self.paths.session_id,
+            "owner_pid": self.pid,
+            "created_at": time.time(),
+        }
+        for _ in range(3):
+            try:
+                fd = os.open(str(self.paths.lock_file), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+            except FileExistsError:
+                holder = _read_json(self.paths.lock_file)
+                holder_pid = holder.get("owner_pid")
+                if holder_pid == self.pid:
+                    self.acquired = True
+                    self._record()
+                    return
+                if isinstance(holder_pid, int) and self.pid_alive(holder_pid):
+                    raise RuntimeError(
+                        f"IE session '{self.paths.session_id}' is already owned by "
+                        f"ie-mcp process PID {holder_pid}. Use a different IE_SESSION_ID."
+                    )
+                try:
+                    self.paths.lock_file.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, sort_keys=True)
+                fh.write("\n")
+            self.acquired = True
+            self._record(driver_pid=None, edge_pid=None, profile=None)
+            return
+        raise RuntimeError(f"could not acquire IE session lease '{self.paths.session_id}'")
+
+    def update(self, **updates):
+        return self._record(**updates)
+
+    def release(self):
+        lock = _read_json(self.paths.lock_file)
+        if lock.get("owner_pid") == self.pid and lock.get("session_id") == self.paths.session_id:
+            try:
+                self.paths.lock_file.unlink()
+            except FileNotFoundError:
+                pass
+        owner = _read_json(self.paths.owner_file)
+        if owner.get("owner_pid") == self.pid and owner.get("session_id") == self.paths.session_id:
+            try:
+                self.paths.owner_file.unlink()
+            except FileNotFoundError:
+                pass
+        self.acquired = False
+
+
+LEASE = SessionLease(SESSION_PATHS)
+
+
+def acquire_lock():
+    if USE_LOCK:
+        LEASE.acquire()
 
 
 def release_lock():
-    if not USE_LOCK:
-        return
-    try:
-        if os.path.exists(LOCK_FILE) and open(LOCK_FILE).read().strip().startswith(str(os.getpid())):
-            os.remove(LOCK_FILE)
-    except Exception:
-        pass
+    if USE_LOCK:
+        LEASE.release()
 
 
 # --- ensure Edge IE-mode policies are set (self-healing, HKCU = no admin) -----
@@ -225,6 +346,80 @@ def kill_pids(pids):
     return killed
 
 
+def _owned_processes_for_record(record, browser_by_pid):
+    """Return PIDs that still match a stale record strongly enough to kill safely."""
+    profile = record.get("profile")
+    edge_pid = record.get("edge_pid")
+    driver_pid = record.get("driver_pid")
+    edge = browser_by_pid.get(edge_pid)
+    driver = browser_by_pid.get(driver_pid)
+
+    edge_matches = bool(
+        edge
+        and edge.get("kind") == "edge-ie"
+        and profile
+        and edge.get("profile") == profile
+    )
+    owned = []
+    # The Edge profile is the durable identity for an IEDriver-created browser.
+    # Only trust the associated driver PID when that profile still exists too;
+    # this prevents PID reuse from killing a newer agent's unrelated driver.
+    if edge_matches and driver and driver.get("kind") == "iedriver":
+        owned.append(driver_pid)
+    if edge_matches:
+        owned.append(edge_pid)
+    return owned
+
+
+def cleanup_stale_sessions(session_root, browser_rows=None, pid_alive=None, kill=None):
+    """Kill only browsers registered to dead ie-mcp owner processes.
+
+    Unknown browser processes and sessions whose owner PID is alive are always
+    preserved. Session records remain on disk with cleared process identities so
+    their scoped logs are retained for diagnosis.
+    """
+    session_root = Path(session_root)
+    pid_alive = pid_alive or _pid_alive
+    kill = kill or kill_pids
+    browser_rows = list_ie_browsers() if browser_rows is None else list(browser_rows)
+    browser_by_pid = {row.get("pid"): row for row in browser_rows if row.get("pid")}
+    cleanup_pids = []
+    stale_records = []
+    skipped_live_sessions = []
+
+    if session_root.exists():
+        for owner_file in sorted(session_root.glob("*/owner.json")):
+            record = _read_json(owner_file)
+            session_id = record.get("session_id") or owner_file.parent.name
+            owner_pid = record.get("owner_pid")
+            if isinstance(owner_pid, int) and pid_alive(owner_pid):
+                skipped_live_sessions.append(session_id)
+                continue
+            owned = _owned_processes_for_record(record, browser_by_pid)
+            if owned:
+                cleanup_pids.extend(pid for pid in owned if pid not in cleanup_pids)
+                stale_records.append((owner_file, record))
+
+    killed = list(kill(cleanup_pids)) if cleanup_pids else []
+    for owner_file, record in stale_records:
+        record.update({
+            "driver_pid": None,
+            "edge_pid": None,
+            "profile": None,
+            "cleaned_at": time.time(),
+        })
+        _write_json_atomic(owner_file, record)
+
+    cleanup_set = set(cleanup_pids)
+    return {
+        "killed": killed,
+        "skipped_live_sessions": sorted(skipped_live_sessions),
+        "untracked_process_pids": sorted(
+            row["pid"] for row in browser_rows if row.get("pid") not in cleanup_set
+        ),
+    }
+
+
 # --- the IE driver wrapper ---------------------------------------------------
 class IeSession:
     def __init__(self):
@@ -273,7 +468,7 @@ class IeSession:
                 log("session dead, recreating")
                 self.quit()
 
-        acquire_lock()  # refuse if another ie-mcp process owns the browser
+        acquire_lock()  # refuse only if another process owns this session identity
         last = None
         for attempt in range(1, ATTACH_RETRIES + 1):
             try:
@@ -305,6 +500,7 @@ class IeSession:
                     break
         except Exception:
             pass
+        LEASE.update(driver_pid=self.driver_pid, edge_pid=self.edge_pid, profile=self.profile)
         log(f"session identity: driver_pid={self.driver_pid} edge_pid={self.edge_pid} profile={self.profile}")
 
     def quit(self):
@@ -407,6 +603,8 @@ def t_goto(args):
 def t_status(args):
     info = {
         "active": SESSION.driver is not None,
+        "session_id": SESSION_ID,
+        "session_directory": str(SESSION_PATHS.directory),
         "driver_pid": SESSION.driver_pid,
         "edge_pid": SESSION.edge_pid,
         "profile": SESSION.profile,
@@ -436,27 +634,21 @@ def t_browsers(args):
         b["mine"] = (b["kind"] == "edge-ie" and b["pid"] == SESSION.edge_pid) or \
                     (b["kind"] == "iedriver" and b["pid"] == SESSION.driver_pid)
     edges = [b for b in rows if b["kind"] == "edge-ie"]
-    orphans = [b["pid"] for b in edges if not b["mine"]]
+    other_edges = [b["pid"] for b in edges if not b["mine"]]
     return text_result(json.dumps({
-        "current": {"driver_pid": SESSION.driver_pid, "edge_pid": SESSION.edge_pid,
-                    "profile": SESSION.profile},
+        "current": {"session_id": SESSION_ID, "driver_pid": SESSION.driver_pid,
+                    "edge_pid": SESSION.edge_pid, "profile": SESSION.profile},
         "ie_browsers": edges,
         "iedriver_processes": [b["pid"] for b in rows if b["kind"] == "iedriver"],
-        "orphan_edge_pids": orphans,
+        "other_agent_or_untracked_edge_pids": other_edges,
     }, indent=2))
 
 
 def t_kill_orphans(args):
-    """Kill IE-mode Edge windows / IEDriver processes NOT owned by the current session."""
-    rows = list_ie_browsers()
-    victims = []
-    for b in rows:
-        mine = (b["kind"] == "edge-ie" and b["pid"] == SESSION.edge_pid) or \
-               (b["kind"] == "iedriver" and b["pid"] == SESSION.driver_pid)
-        if not mine:
-            victims.append(b["pid"])
-    killed = kill_pids(victims)
-    return text_result(json.dumps({"killed": killed, "kept_current": SESSION.edge_pid}, indent=2))
+    """Kill processes owned by crashed sessions, preserving every live agent."""
+    result = cleanup_stale_sessions(SESSION_ROOT)
+    result["kept_current"] = SESSION.edge_pid
+    return text_result(json.dumps(result, indent=2))
 
 
 def t_frames(args):
@@ -1071,7 +1263,7 @@ TOOLS = [
     {
         "name": "ie_status",
         "description": "Session state as JSON: active/alive, title, url, window_handles, and the "
-                       "browser this session owns (driver_pid, edge_pid, profile).",
+                       "session identity/directory plus its owned browser PIDs and profile.",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": t_status,
     },
@@ -1085,8 +1277,8 @@ TOOLS = [
     },
     {
         "name": "ie_kill_orphans",
-        "description": "Terminate IE-mode Edge windows / IEDriver processes NOT owned by the current "
-                       "session (cleanup of leftovers). Keeps the current session's browser.",
+        "description": "Terminate only IE-mode Edge / IEDriver processes recorded for crashed ie-mcp "
+                       "sessions. Never kills browsers owned by live agents or unknown processes.",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": t_kill_orphans,
     },
@@ -1562,7 +1754,8 @@ def main():
     except Exception:
         pass
     ensure_ie_policies()
-    log("ready")
+    acquire_lock()
+    log(f"ready session={SESSION_ID} directory={SESSION_PATHS.directory}")
     try:
         for line in sys.stdin:
             line = line.strip()
