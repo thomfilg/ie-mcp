@@ -181,6 +181,7 @@ All configuration is via environment variables — **all optional**:
 | `IE_ATTACH_RETRIES` | `3` | IEDriver attach attempts. |
 | `IE_PAGE_TIMEOUT` | `30` | Per-page load timeout (seconds). |
 | `IE_PYDEPS` | `../.pydeps` | Extra `sys.path` dir for vendored selenium. |
+| `IE_INTERACTION_MODE` | `native` | Input strategy: `background` avoids forced focus and physical mouse input; `native` uses focused OS events for maximum legacy compatibility. Selected when the MCP process starts. |
 | `IE_LOG_FILE` | `<session-dir>\ie-mcp.log` | Optional override for this session's log file. |
 | `IE_SESSION_ID` | `pid-<MCP process PID>` | Stable agent/session name. Different IDs can run concurrently; the same ID is exclusive. |
 | `IE_SESSION_ROOT` | `%TEMP%\ie-mcp\sessions` | Root for session directories containing logs, leases, and ownership records. |
@@ -328,9 +329,30 @@ used as the session ID, which makes separate Codex/Claude agent processes indepe
 IE_SESSION_ID = "qa-agent-country"
 ```
 
-IEDriver continues to use native events and require window focus. Parallel browsers can therefore
-compete for focus on the visible Windows desktop; this mode provides process ownership and cleanup
-isolation, not true headless IE mode.
+### Choosing interaction mode (LLM guidance)
+
+LLM agents should choose `background` when the MCP runs on a person's active desktop. It avoids
+forcing the IE-mode Edge window to the foreground and uses synthetic events instead of physical
+mouse/keyboard input. Prefer it for navigation, page inspection, ordinary clicks, and form entry:
+
+```toml
+[mcp_servers.ie-mcp.env]
+IE_INTERACTION_MODE = "background"
+```
+
+Use `native` only as a compatibility fallback after a required interaction fails in background
+mode—for example, a legacy control, hover menu, file upload, OS modal, or ActiveX component. Native
+mode uses focused OS input and may take over the user's mouse:
+
+```toml
+[mcp_servers.ie-mcp.env]
+IE_INTERACTION_MODE = "native"
+```
+
+The mode is fixed for the lifetime of the MCP process, so restart the MCP after changing it. Neither
+mode is headless: Edge still creates a visible IE-mode window. When multiple native-mode agents run
+on the same Windows desktop, their focus-sensitive interactions can still conflict. The server also
+returns this selection guidance in its MCP `initialize` response so clients can present it to LLMs.
 
 ### Tests
 

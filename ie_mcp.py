@@ -22,6 +22,8 @@ Configuration (all via env vars, all optional):
   IE_ATTACH_RETRIES IEDriver attach attempts (default 3)
   IE_PAGE_TIMEOUT   per-page load timeout in seconds (default 30)
   IE_PYDEPS         extra sys.path dir for vendored selenium (default ../.pydeps)
+  IE_INTERACTION_MODE native (focused OS input, default) or background
+                    (synthetic input without forcing browser focus)
   IE_SESSION_ID     logical agent/session name (default pid-<mcp process PID>)
   IE_SESSION_ROOT   root for per-session logs, locks, and ownership records
 
@@ -69,6 +71,27 @@ USE_LOCK = os.environ.get("IE_NO_LOCK", "").lower() not in ("1", "true", "yes")
 
 
 @dataclass(frozen=True)
+class InteractionMode:
+    name: str
+    require_window_focus: bool
+    native_events: bool
+
+
+def resolve_interaction_mode(env=None):
+    """Resolve the IEDriver input strategy from the process environment."""
+    env = os.environ if env is None else env
+    name = (env.get("IE_INTERACTION_MODE") or "native").strip().lower()
+    if name == "native":
+        return InteractionMode(name="native", require_window_focus=True, native_events=True)
+    if name == "background":
+        return InteractionMode(name="background", require_window_focus=False, native_events=False)
+    raise ValueError("IE_INTERACTION_MODE must be native or background")
+
+
+INTERACTION_MODE = resolve_interaction_mode()
+
+
+@dataclass(frozen=True)
 class SessionPaths:
     session_id: str
     root: Path
@@ -110,6 +133,15 @@ LOCK_FILE = SESSION_PATHS.lock_file
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "ie-mcp", "version": "0.1.0"}
+SERVER_INSTRUCTIONS = (
+    "IE interaction mode is selected when this MCP process starts. "
+    "Use IE_INTERACTION_MODE=background when automation runs on a user's active desktop: "
+    "it uses synthetic events and does not force browser focus. Prefer it for navigation, "
+    "reading, form entry, and ordinary clicks. If a legacy control, hover, upload, modal, or "
+    "ActiveX interaction fails in background mode, restart this MCP with "
+    "IE_INTERACTION_MODE=native as the compatibility fallback; native mode may take focus and "
+    "interfere with the user's mouse. IE mode is not headless in either mode."
+)
 
 
 def log(*a):
@@ -437,9 +469,9 @@ class IeSession:
         options.edge_executable_path = EDGE
         options.ignore_zoom_level = True
         options.ignore_protected_mode_settings = True
-        options.require_window_focus = True
+        options.require_window_focus = INTERACTION_MODE.require_window_focus
         options.ensure_clean_session = True
-        options.native_events = True
+        options.native_events = INTERACTION_MODE.native_events
         options.browser_attach_timeout = 30_000
         options.page_load_strategy = "none"
         # CRITICAL for IE mode: navigate during session creation so IEDriver
@@ -603,6 +635,7 @@ def t_goto(args):
 def t_status(args):
     info = {
         "active": SESSION.driver is not None,
+        "interaction_mode": INTERACTION_MODE.name,
         "session_id": SESSION_ID,
         "session_directory": str(SESSION_PATHS.directory),
         "driver_pid": SESSION.driver_pid,
@@ -1263,7 +1296,7 @@ TOOLS = [
     {
         "name": "ie_status",
         "description": "Session state as JSON: active/alive, title, url, window_handles, and the "
-                       "session identity/directory plus its owned browser PIDs and profile.",
+                       "interaction mode, session identity/directory, and owned browser PIDs/profile.",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": t_status,
     },
@@ -1624,6 +1657,7 @@ def handle(msg):
             "protocolVersion": client_ver,
             "capabilities": {"tools": {}},
             "serverInfo": SERVER_INFO,
+            "instructions": SERVER_INSTRUCTIONS,
         })
     if method == "notifications/initialized":
         return None
